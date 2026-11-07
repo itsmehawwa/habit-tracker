@@ -2,8 +2,6 @@
 """Private habit log for two people. Run: python3 server.py"""
 
 import datetime
-import hashlib
-import hmac
 import json
 import os
 import secrets
@@ -19,10 +17,9 @@ PUBLIC = ROOT / "public"
 DATA_DIR = ROOT / "data"
 DATA_FILE = DATA_DIR / "habits.json"
 PORT = int(os.environ.get("PORT", "3000"))
-HABITS = ("fajr", "morning", "quran", "evening")
+HABITS = ("fajr", "morning", "daily-quran", "evening")
 SESSION_SECONDS = 60 * 60 * 24 * 60
 LOCK = threading.Lock()
-ATTEMPTS = {}
 
 
 class RequestDone(Exception):
@@ -65,24 +62,6 @@ def public_people(data):
     return [{"id": person["id"], "name": person["name"]} for person in data["people"]]
 
 
-def hash_pin(pin, salt=None):
-    if salt is None:
-        salt = secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac(
-        "sha256",
-        pin.encode("utf-8"),
-        salt.encode("utf-8"),
-        200_000,
-        dklen=32,
-    )
-    return salt, digest.hex()
-
-
-def pin_matches(pin, salt, hashed):
-    _, actual = hash_pin(pin, salt)
-    return hmac.compare_digest(actual, hashed)
-
-
 def today_iso():
     return datetime.date.today().isoformat()
 
@@ -119,26 +98,6 @@ def state_for(data, person):
 
 def now_ms():
     return int(datetime.datetime.now().timestamp() * 1000)
-
-
-def too_many(person_id):
-    row = ATTEMPTS.get(person_id)
-    if not row:
-        return False
-    if now_ms() > row["reset"]:
-        ATTEMPTS.pop(person_id, None)
-        return False
-    return row["count"] >= 8
-
-
-def mark_failure(person_id):
-    row = ATTEMPTS.get(person_id) or {"count": 0, "reset": now_ms() + 60_000}
-    if now_ms() > row["reset"]:
-        row = {"count": 0, "reset": now_ms() + 60_000}
-    row["count"] += 1
-    if row["count"] >= 8:
-        row["reset"] = now_ms() + 60_000
-    ATTEMPTS[person_id] = row
 
 
 def cookie(token, clear=False):
@@ -255,27 +214,13 @@ class Handler(BaseHTTPRequestHandler):
             first = raw_people[0] if raw_people else {}
             second = raw_people[1] if len(raw_people) > 1 else {}
             names = [clean_name(first.get("name")), clean_name(second.get("name"))]
-            pins = [str(first.get("pin") or ""), str(second.get("pin") or "")]
             if not names[0] or not names[1]:
                 self.send_json(400, {"error": "Enter both names."})
                 return
             if names[0].lower() == names[1].lower():
                 self.send_json(400, {"error": "Use two different names."})
                 return
-            if any(len(pin) != 4 or not pin.isdigit() for pin in pins):
-                self.send_json(400, {"error": "Each PIN must be 4 digits."})
-                return
-            people = []
-            for name, pin in zip(names, pins):
-                salt, hashed = hash_pin(pin)
-                people.append(
-                    {
-                        "id": secrets.token_hex(8),
-                        "name": name,
-                        "salt": salt,
-                        "pinHash": hashed,
-                    }
-                )
+            people = [{"id": secrets.token_hex(8), "name": name} for name in names]
             data = {"people": people, "checks": {}, "sessions": {}}
             token = secrets.token_hex(32)
             data["sessions"][token] = {"personId": people[0]["id"], "expires": now_ms() + SESSION_SECONDS * 1000}
@@ -285,18 +230,12 @@ class Handler(BaseHTTPRequestHandler):
     def login(self):
         body = self.read_body()
         person_id = str(body.get("personId") or "")
-        pin = str(body.get("pin") or "")
-        if too_many(person_id):
-            self.send_json(429, {"error": "Too many tries. Wait a minute, then try again."})
-            return
         with LOCK:
             data = load()
             person = next((entry for entry in (data or {}).get("people", []) if entry["id"] == person_id), None)
-            if not person or not pin_matches(pin, person["salt"], person["pinHash"]):
-                mark_failure(person_id)
-                self.send_json(401, {"error": "That PIN doesn’t match."})
+            if not person:
+                self.send_json(401, {"error": "Choose a name to continue."})
                 return
-            ATTEMPTS.pop(person_id, None)
             now = now_ms()
             data["sessions"] = {
                 token: session

@@ -1,7 +1,7 @@
 const HABITS = [
   { id: "fajr", label: "Fajr on time" },
   { id: "morning", label: "Morning dua" },
-  { id: "quran", label: "Quran" },
+  { id: "daily-quran", label: "Daily Qur'an" },
   { id: "evening", label: "Evening dua" },
 ];
 
@@ -11,8 +11,6 @@ const now = new Date();
 let view = "boot";
 let directory = [];
 let session = null;
-let loginPersonId = "";
-let pin = "";
 let error = "";
 let busy = false;
 let viewedYear = now.getFullYear();
@@ -31,7 +29,6 @@ async function boot() {
     try {
       const status = await api("/api/status");
       directory = status.people || [];
-      loginPersonId = directory[0]?.id || "";
       view = status.needsSetup ? "setup" : "login";
     } catch {
       view = "offline";
@@ -68,17 +65,15 @@ function setupHtml() {
       <span class="mark" aria-hidden="true"></span>
       <p class="eyebrow">Private</p>
       <h1>Our Habits</h1>
-      <p class="lede">A shared log for the two of you. Fajr on time, morning dua, Quran, and evening dua.</p>
+      <p class="lede">A shared log for the two of you. Fajr on time, morning dua, daily Qur'an, and evening dua.</p>
     </header>
     <section class="card auth">
       <form id="setup">
         <div class="fields">
           <label>Your name <input id="name-a" name="name-a" maxlength="24" autocomplete="nickname" required /></label>
-          <label>Your PIN <input id="pin-a" name="pin-a" inputmode="numeric" autocomplete="new-password" maxlength="4" pattern="[0-9]{4}" required /></label>
           <label>Partner’s name <input id="name-b" name="name-b" maxlength="24" autocomplete="off" required /></label>
-          <label>Partner’s PIN <input id="pin-b" name="pin-b" inputmode="numeric" autocomplete="new-password" maxlength="4" pattern="[0-9]{4}" required /></label>
         </div>
-        <p class="hint">Each of you signs in with your own 4-digit PIN. You’ll be able to see each other’s days.</p>
+        <p class="hint">Tap a name to open the log. You’ll both see the same month.</p>
         <p class="error" id="form-error"${error ? "" : " hidden"}>${escapeHtml(error)}</p>
         <button class="primary" type="submit">Create our log</button>
       </form>
@@ -87,10 +82,6 @@ function setupHtml() {
 }
 
 function loginHtml() {
-  const dots = [0, 1, 2, 3]
-    .map((index) => `<span class="dot${index < pin.length ? " is-filled" : ""}"></span>`)
-    .join("");
-  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "back"];
   return `<main class="screen">
     <header class="brand">
       <span class="mark" aria-hidden="true"></span>
@@ -103,21 +94,8 @@ function loginHtml() {
         <div class="people">
           ${directory
             .map(
-              (person) => `<button type="button" class="person${person.id === loginPersonId ? " is-selected" : ""}" data-action="pick-person" data-id="${escapeHtml(person.id)}">${escapeHtml(person.name)}</button>`
+              (person) => `<button type="button" class="person" data-action="enter" data-id="${escapeHtml(person.id)}">${escapeHtml(person.name)}</button>`
             )
-            .join("")}
-        </div>
-        <p class="pin-label">PIN</p>
-        <div class="dots" aria-hidden="true">${dots}</div>
-        <div class="keypad">
-          ${keys
-            .map((key) => {
-              if (!key) return `<span></span>`;
-              if (key === "back") {
-                return `<button type="button" class="key" data-action="backspace" aria-label="Delete">⌫</button>`;
-              }
-              return `<button type="button" class="key" data-action="key" data-key="${key}">${key}</button>`;
-            })
             .join("")}
         </div>
         <p class="error" role="alert">${escapeHtml(error)}</p>
@@ -241,7 +219,7 @@ function partnerLine(other, iso) {
   const record = session.checks[iso]?.[other.id] || {};
   const done = HABITS.filter((habit) => record[habit.id]);
   if (!done.length) return `${escapeHtml(other.name)} hasn’t logged this day.`;
-  if (done.length === HABITS.length) return `${escapeHtml(other.name)} · all four done.`;
+  if (done.length === HABITS.length) return `${escapeHtml(other.name)} · all ${habitCountWord()} done.`;
   return `${escapeHtml(other.name)} · ${done.map((habit) => habit.label).join(", ")}`;
 }
 
@@ -251,10 +229,14 @@ function streakLine(personId) {
   const todayDone = allDone(personId, new Date());
   const label = todayDone
     ? count === 1
-      ? "All four habits today."
-      : `All four habits, ${count} days in a row.`
-    : `All four habits, ${count} ${count === 1 ? "day" : "days"} in a row before today.`;
+      ? `All ${habitCountWord()} habits today.`
+      : `All ${habitCountWord()} habits, ${count} days in a row.`
+    : `All ${habitCountWord()} habits, ${count} ${count === 1 ? "day" : "days"} in a row before today.`;
   return `<p class="streak">${label}</p>`;
+}
+
+function habitCountWord() {
+  return ["none", "one", "two", "three", "four", "five", "six", "seven"][HABITS.length] || String(HABITS.length);
 }
 
 function countChecks(personId, monthKey) {
@@ -318,10 +300,7 @@ async function onSubmit(event) {
     session = await api("/api/setup", {
       method: "POST",
       body: {
-        people: [
-          { name: form["name-a"].value, pin: form["pin-a"].value },
-          { name: form["name-b"].value, pin: form["pin-b"].value },
-        ],
+        people: [{ name: form["name-a"].value }, { name: form["name-b"].value }],
       },
     });
     view = "app";
@@ -345,27 +324,8 @@ async function onClick(event) {
   if (!target || busy) return;
   const action = target.dataset.action;
 
-  if (action === "pick-person") {
-    loginPersonId = target.dataset.id;
-    pin = "";
-    error = "";
-    render();
-    return;
-  }
-
-  if (action === "key") {
-    if (pin.length >= 4) return;
-    pin += target.dataset.key;
-    error = "";
-    render();
-    if (pin.length === 4) submitPin();
-    return;
-  }
-
-  if (action === "backspace") {
-    pin = pin.slice(0, -1);
-    error = "";
-    render();
+  if (action === "enter") {
+    enterAs(target.dataset.id);
     return;
   }
 
@@ -377,11 +337,9 @@ async function onClick(event) {
       /* clearing the local screen is still the right result */
     }
     session = null;
-    pin = "";
     error = "";
     const status = await api("/api/status");
     directory = status.people || [];
-    loginPersonId = directory[0]?.id || "";
     view = "login";
     busy = false;
     render();
@@ -412,20 +370,17 @@ async function onClick(event) {
   if (action === "toggle") toggleHabit(target.dataset.habit);
 }
 
-async function submitPin() {
+async function enterAs(personId) {
   busy = true;
-  const entered = pin;
   try {
     session = await api("/api/login", {
       method: "POST",
-      body: { personId: loginPersonId, pin: entered },
+      body: { personId },
     });
-    pin = "";
     error = "";
     view = "app";
     selected = isoFromDate(new Date());
   } catch (err) {
-    pin = "";
     error = err.message;
   }
   busy = false;

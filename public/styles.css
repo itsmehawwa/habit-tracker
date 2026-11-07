@@ -201,7 +201,6 @@ input {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.7rem;
-  margin-bottom: 1.1rem;
 }
 
 .person {
@@ -214,55 +213,7 @@ input {
   font-size: 1.35rem;
 }
 
-.person.is-selected {
-  border-color: transparent;
-  background: var(--green-soft);
-  box-shadow: inset 0 0 0 1.5px var(--green);
-}
-
-.pin-label {
-  margin: 0 0 0.55rem;
-  text-align: center;
-  font-size: 0.82rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.dots {
-  display: flex;
-  justify-content: center;
-  gap: 0.7rem;
-  margin-bottom: 1rem;
-}
-
-.dot {
-  width: 0.75rem;
-  height: 0.75rem;
-  border: 1.5px solid var(--green);
-  border-radius: 50%;
-}
-
-.dot.is-filled {
-  background: var(--green);
-}
-
-.keypad {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0.45rem;
-}
-
-.key {
-  min-height: 3.3rem;
-  border-radius: 0.85rem;
-  background: #fff;
-  font-size: 1.3rem;
-  font-weight: 500;
-}
-
-.key:hover,
+.person:hover,
 .nav-btn:hover,
 .text-btn:hover {
   background: var(--green-soft);
