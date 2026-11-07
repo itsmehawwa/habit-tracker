@@ -19,7 +19,6 @@ let selected = isoFromDate(now);
 
 root.addEventListener("click", onClick);
 root.addEventListener("submit", onSubmit);
-boot();
 
 async function boot() {
   try {
@@ -248,6 +247,7 @@ function appHtml() {
         </div>
         <p class="partner-line">${partnerLine(other, selected)}</p>
         ${streakLine(me.id)}
+        ${earlierHtml(me, other, monthKey)}
       </section>
       <section class="card month" aria-label="Month">
         <div class="month-head">
@@ -560,3 +560,38 @@ function chevron(direction) {
 function checkSvg() {
   return `<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M3.2 8.3 6.3 11.2 12.8 4.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
+
+function earlierHtml(me, other, monthKey) {
+  const dates = Object.keys(session.checks)
+    .filter((date) => date.startsWith(monthKey) && date !== selected)
+    .sort()
+    .reverse();
+  if (!dates.length) return "";
+  const rows = dates
+    .map((date) => {
+      const label = parseIso(date).toLocaleDateString(undefined, {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+      });
+      return `<button type="button" class="earlier-day" data-action="select-day" data-date="${date}">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(entryLine(me, date))}</span>
+        ${other ? `<span>${escapeHtml(entryLine(other, date))}</span>` : ""}
+      </button>`;
+    })
+    .join("");
+  return `<div class="earlier">
+    <h3>Earlier</h3>
+    <div class="earlier-list">${rows}</div>
+  </div>`;
+}
+
+function entryLine(person, date) {
+  const done = HABITS.filter((habit) => session.checks[date]?.[person.id]?.[habit.id]);
+  if (!done.length) return `${person.name}: none`;
+  if (done.length === HABITS.length) return `${person.name}: all ${habitCountWord()}`;
+  return `${person.name}: ${done.map((habit) => habit.label).join(", ")}`;
+}
+
+boot();
