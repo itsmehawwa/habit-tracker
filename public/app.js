@@ -8,8 +8,12 @@ const HABITS = [
 const root = document.getElementById("app");
 const now = new Date();
 
+const PEOPLE = [
+  { id: "hawwa", name: "Hawwa" },
+  { id: "muhammad", name: "Muhammad" },
+];
+
 let view = "boot";
-let directory = [];
 let session = null;
 let error = "";
 let busy = false;
@@ -25,24 +29,23 @@ async function boot() {
     session = await api("/api/me");
     view = "app";
   } catch {
-    try {
-      const status = await api("/api/status");
-      directory = status.people || [];
-      view = status.needsSetup ? "setup" : "login";
-    } catch {
-      view = "offline";
-    }
+    view = "login";
   }
   render();
 }
 
 async function api(path, options = {}) {
   if (location.hostname.endsWith("github.io")) return localApi(path, options);
-  const response = await fetch(path, {
-    method: options.method || "GET",
-    headers: options.body ? { "Content-Type": "application/json" } : undefined,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      method: options.method || "GET",
+      headers: options.body ? { "Content-Type": "application/json" } : undefined,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+  } catch {
+    throw new Error("The log isn’t running on this computer.");
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || "Something went wrong.");
   return data;
@@ -52,34 +55,29 @@ function localApi(path, options) {
   const data = readLocal();
   const method = options.method || "GET";
   const body = options.body || {};
-  const me = data.people.find((person) => person.id === localStorage.getItem(ME_KEY));
+  const me = data.people.find((person) => person.id === data.meId);
 
   if (method === "GET" && path === "/api/me") {
     if (!me) throw new Error("Sign in to continue.");
     return stateFor(data, me);
   }
-  if (method === "GET" && path === "/api/status") {
-    return { needsSetup: data.people.length < 2, people: publicPeople(data) };
-  }
-  if (method === "POST" && path === "/api/setup") {
-    if (data.people.length) throw new Error("This log is already set up.");
-    const names = [cleanName(body.people?.[0]?.name), cleanName(body.people?.[1]?.name)];
-    if (!names[0] || !names[1]) throw new Error("Enter both names.");
-    if (names[0].toLowerCase() === names[1].toLowerCase()) throw new Error("Use two different names.");
-    data.people = names.map((name) => ({ id: newId(), name }));
-    data.checks = {};
-    writeLocal(data);
-    localStorage.setItem(ME_KEY, data.people[0].id);
-    return stateFor(data, data.people[0]);
-  }
   if (method === "POST" && path === "/api/login") {
-    const person = data.people.find((entry) => entry.id === body.personId);
-    if (!person) throw new Error("Choose a name to continue.");
-    localStorage.setItem(ME_KEY, person.id);
+    const person = data.people.find((entry) => entry.name.toLowerCase() === cleanName(body.name).toLowerCase());
+    const username = cleanEmail(body.username);
+    if (!person) throw new Error("Sign in as Hawwa or Muhammad.");
+    if (!validEmail(username)) throw new Error("Enter your email address.");
+    if (data.people.some((entry) => entry.username === username && entry.id !== person.id)) {
+      throw new Error("That email is already used.");
+    }
+    if (!person.username) person.username = username;
+    else if (person.username !== username) throw new Error("That username doesn’t match this name.");
+    data.meId = person.id;
+    writeLocal(data);
     return stateFor(data, person);
   }
   if (method === "POST" && path === "/api/logout") {
-    localStorage.removeItem(ME_KEY);
+    data.meId = "";
+    writeLocal(data);
     return { ok: true };
   }
   if (method === "PUT" && path === "/api/check") {
@@ -104,20 +102,52 @@ function localApi(path, options) {
 }
 
 const LOCAL_KEY = "habit-tracker";
-const ME_KEY = "habit-tracker-me";
 
 function readLocal() {
   try {
-    const data = JSON.parse(localStorage.getItem(LOCAL_KEY) || "");
-    if (!Array.isArray(data.people) || typeof data.checks !== "object" || !data.checks) throw new Error("bad");
-    return data;
+    return normalizeLog(JSON.parse(localStorage.getItem(LOCAL_KEY) || ""));
   } catch {
-    return { people: [], checks: {} };
+    return normalizeLog(null);
   }
 }
 
 function writeLocal(data) {
-  localStorage.setItem(LOCAL_KEY, JSON.stringify({ people: data.people, checks: data.checks }));
+  localStorage.setItem(
+    LOCAL_KEY,
+    JSON.stringify({ people: data.people, checks: data.checks, meId: data.meId || "" })
+  );
+  localStorage.removeItem("habit-tracker-me");
+}
+
+function normalizeLog(data) {
+  const oldPeople = Array.isArray(data?.people) ? data.people : [];
+  const people = PEOPLE.map((person, index) => {
+    const named = oldPeople.find((entry) => String(entry?.name || "").toLowerCase() === person.name.toLowerCase());
+    const source = named || oldPeople[index] || {};
+    return { id: person.id, name: person.name, username: cleanEmail(named?.username || source.username || "") };
+  });
+  const idMap = {};
+  oldPeople.forEach((entry, index) => {
+    if (!entry?.id) return;
+    const named = people.find((person) => person.name.toLowerCase() === String(entry.name || "").toLowerCase());
+    idMap[entry.id] = (named || people[index] || {}).id;
+  });
+  const checks = {};
+  const sourceChecks = data?.checks && typeof data.checks === "object" ? data.checks : {};
+  for (const [date, day] of Object.entries(sourceChecks)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !day || typeof day !== "object") continue;
+    const mapped = {};
+    for (const [personId, habits] of Object.entries(day)) {
+      const id = idMap[personId] || personId;
+      if (!people.some((person) => person.id === id) || !habits || typeof habits !== "object") continue;
+      const kept = {};
+      for (const habit of HABITS) if (habits[habit.id]) kept[habit.id] = true;
+      if (Object.keys(kept).length) mapped[id] = { ...(mapped[id] || {}), ...kept };
+    }
+    if (Object.keys(mapped).length) checks[date] = mapped;
+  }
+  const meId = people.some((person) => person.id === data?.meId) ? data.meId : "";
+  return { people, checks, meId };
 }
 
 function publicPeople(data) {
@@ -136,42 +166,19 @@ function cleanName(value) {
   return String(value || "").trim().replace(/\s+/g, " ").slice(0, 24);
 }
 
-function newId() {
-  const bytes = crypto.getRandomValues(new Uint8Array(8));
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+function cleanEmail(value) {
+  return String(value || "").trim().toLowerCase().slice(0, 80);
+}
+
+function validEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 function render() {
   const scroll = window.scrollY;
-  if (view === "setup") root.innerHTML = setupHtml();
-  else if (view === "login") root.innerHTML = loginHtml();
+  if (view === "login") root.innerHTML = loginHtml();
   else if (view === "app") root.innerHTML = appHtml();
-  else if (view === "offline") {
-    root.innerHTML = `<main class="screen"><h1>Habit Tracker</h1><p class="lede">The log isn’t running on this computer.</p></main>`;
-  }
   window.scrollTo(0, scroll);
-}
-
-function setupHtml() {
-  return `<main class="screen">
-    <header class="brand">
-      <span class="mark" aria-hidden="true"></span>
-      <p class="eyebrow">Private</p>
-      <h1>Habit Tracker</h1>
-      <p class="lede">A shared log for the two of you. Fajr on time, morning dua, daily Qur'an, and evening dua.</p>
-    </header>
-    <section class="card auth">
-      <form id="setup">
-        <div class="fields">
-          <label>Your name <input id="name-a" name="name-a" maxlength="24" autocomplete="nickname" required /></label>
-          <label>Partner’s name <input id="name-b" name="name-b" maxlength="24" autocomplete="off" required /></label>
-        </div>
-        <p class="hint">Tap a name to open the log. You’ll both see the same month.</p>
-        <p class="error" id="form-error"${error ? "" : " hidden"}>${escapeHtml(error)}</p>
-        <button class="primary" type="submit">Create our log</button>
-      </form>
-    </section>
-  </main>`;
 }
 
 function loginHtml() {
@@ -180,19 +187,18 @@ function loginHtml() {
       <span class="mark" aria-hidden="true"></span>
       <p class="eyebrow">Private</p>
       <h1>Habit Tracker</h1>
-      <p class="lede">Who’s logging in today?</p>
+      <p class="lede">Sign in with your name and email address.</p>
     </header>
     <section class="card auth">
-      <div class="login-card">
-        <div class="people">
-          ${directory
-            .map(
-              (person) => `<button type="button" class="person" data-action="enter" data-id="${escapeHtml(person.id)}">${escapeHtml(person.name)}</button>`
-            )
-            .join("")}
+      <form id="login">
+        <div class="fields">
+          <label>Name <input name="name" maxlength="24" autocomplete="name" required /></label>
+          <label>Username <input name="username" type="email" maxlength="80" autocomplete="username" inputmode="email" placeholder="Email address" required /></label>
         </div>
-        <p class="error" role="alert">${escapeHtml(error)}</p>
-      </div>
+        <p class="hint">Hawwa and Muhammad each sign in with their own email.</p>
+        <p class="error" id="form-error"${error ? "" : " hidden"}>${escapeHtml(error)}</p>
+        <button class="primary" type="submit">Sign in</button>
+      </form>
     </section>
   </main>`;
 }
@@ -385,17 +391,15 @@ function currentMonthKey() {
 
 async function onSubmit(event) {
   const form = event.target;
-  if (!(form instanceof HTMLFormElement) || form.id !== "setup") return;
+  if (!(form instanceof HTMLFormElement) || form.id !== "login") return;
   event.preventDefault();
   error = "";
   const button = form.querySelector("button");
   button.disabled = true;
   try {
-    session = await api("/api/setup", {
+    session = await api("/api/login", {
       method: "POST",
-      body: {
-        people: [{ name: form["name-a"].value }, { name: form["name-b"].value }],
-      },
+      body: { name: form.name.value, username: form.username.value },
     });
     view = "app";
     selected = isoFromDate(new Date());
@@ -418,11 +422,6 @@ async function onClick(event) {
   if (!target || busy) return;
   const action = target.dataset.action;
 
-  if (action === "enter") {
-    enterAs(target.dataset.id);
-    return;
-  }
-
   if (action === "logout") {
     busy = true;
     try {
@@ -432,8 +431,6 @@ async function onClick(event) {
     }
     session = null;
     error = "";
-    const status = await api("/api/status");
-    directory = status.people || [];
     view = "login";
     busy = false;
     render();
@@ -462,23 +459,6 @@ async function onClick(event) {
   }
 
   if (action === "toggle") toggleHabit(target.dataset.habit);
-}
-
-async function enterAs(personId) {
-  busy = true;
-  try {
-    session = await api("/api/login", {
-      method: "POST",
-      body: { personId },
-    });
-    error = "";
-    view = "app";
-    selected = isoFromDate(new Date());
-  } catch (err) {
-    error = err.message;
-  }
-  busy = false;
-  render();
 }
 
 async function toggleHabit(habit) {

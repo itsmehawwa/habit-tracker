@@ -18,6 +18,10 @@ DATA_DIR = ROOT / "data"
 DATA_FILE = DATA_DIR / "habits.json"
 PORT = int(os.environ.get("PORT", "3000"))
 HABITS = ("fajr", "morning", "daily-quran", "evening")
+ACCOUNTS = (
+    ("c8b3646c29ef30eb", "Hawwa"),
+    ("b4f806461fc0ecd1", "Muhammad"),
+)
 SESSION_SECONDS = 60 * 60 * 24 * 60
 LOCK = threading.Lock()
 
@@ -79,6 +83,78 @@ def clean_name(value):
     return " ".join(str(value or "").split())[:24]
 
 
+def clean_email(value):
+    return str(value or "").strip().lower()[:80]
+
+
+def valid_email(value):
+    if value.count("@") != 1 or any(char.isspace() for char in value):
+        return False
+    local, domain = value.split("@")
+    return bool(local) and "." in domain and not domain.startswith(".") and not domain.endswith(".")
+
+
+def ensure_data():
+    data = load()
+    if data is None:
+        data = {"people": [], "checks": {}, "sessions": {}}
+    old = [person for person in data.get("people") or [] if isinstance(person, dict)]
+    by_name = {}
+    for person in old:
+        by_name.setdefault(str(person.get("name") or "").casefold(), person)
+    used = set()
+    official = {name.casefold() for _, name in ACCOUNTS}
+    people = []
+    for fallback_id, name in ACCOUNTS:
+        existing = by_name.get(name.casefold())
+        if existing is None or id(existing) in used:
+            existing = next(
+                (
+                    person
+                    for person in old
+                    if id(person) not in used and str(person.get("name") or "").casefold() not in official
+                ),
+                None,
+            )
+        if existing is None:
+            people.append({"id": fallback_id, "name": name, "username": ""})
+            continue
+        used.add(id(existing))
+        people.append(
+            {
+                "id": str(existing.get("id") or fallback_id),
+                "name": name,
+                "username": clean_email(existing.get("username")),
+            }
+        )
+    known = {person["id"] for person in people}
+    checks = {}
+    for date, day in (data.get("checks") or {}).items():
+        if not isinstance(day, dict) or not is_real_date(date):
+            continue
+        mapped = {}
+        for person_id, habits in day.items():
+            if person_id not in known or not isinstance(habits, dict):
+                continue
+            kept = {habit: True for habit in HABITS if habits.get(habit)}
+            if kept:
+                mapped[person_id] = kept
+        if mapped:
+            checks[date] = mapped
+    now = now_ms()
+    sessions = {}
+    for token, session in (data.get("sessions") or {}).items():
+        if not isinstance(session, dict):
+            continue
+        person_id = session.get("personId")
+        if person_id in known and session.get("expires", 0) > now:
+            sessions[token] = {"personId": person_id, "expires": session["expires"]}
+    updated = {"people": people, "checks": checks, "sessions": sessions}
+    if data.get("people") != people or data.get("checks") != checks or data.get("sessions") != sessions:
+        save(updated)
+    return updated
+
+
 def current_user(data, token):
     if not token:
         return None
@@ -138,11 +214,13 @@ class Handler(BaseHTTPRequestHandler):
             self.serve_file(FILES[path])
             return
         if path == "/api/status":
-            data = load()
-            self.send_json(200, {"needsSetup": data is None, "people": public_people(data) if data else []})
+            with LOCK:
+                data = ensure_data()
+            self.send_json(200, {"needsSetup": False, "people": public_people(data)})
             return
         if path == "/api/me":
-            data = load()
+            with LOCK:
+                data = ensure_data()
             person = current_user(data, read_cookie(self.headers.get("Cookie"))) if data else None
             if not person:
                 self.send_json(401, {"error": "Sign in to continue."})
@@ -177,7 +255,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         token = read_cookie(self.headers.get("Cookie"))
         with LOCK:
-            data = load()
+            data = ensure_data()
             person = current_user(data, token) if data else None
             if not person:
                 self.send_json(401, {"error": "Sign in to continue."})
@@ -205,36 +283,29 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {"checks": data["checks"]})
 
     def setup_log(self):
-        body = self.read_body()
-        with LOCK:
-            if load():
-                self.send_json(409, {"error": "This log is already set up."})
-                return
-            raw_people = body.get("people") if isinstance(body.get("people"), list) else [{}, {}]
-            first = raw_people[0] if raw_people else {}
-            second = raw_people[1] if len(raw_people) > 1 else {}
-            names = [clean_name(first.get("name")), clean_name(second.get("name"))]
-            if not names[0] or not names[1]:
-                self.send_json(400, {"error": "Enter both names."})
-                return
-            if names[0].lower() == names[1].lower():
-                self.send_json(400, {"error": "Use two different names."})
-                return
-            people = [{"id": secrets.token_hex(8), "name": name} for name in names]
-            data = {"people": people, "checks": {}, "sessions": {}}
-            token = secrets.token_hex(32)
-            data["sessions"][token] = {"personId": people[0]["id"], "expires": now_ms() + SESSION_SECONDS * 1000}
-            save(data)
-            self.send_json(201, state_for(data, people[0]), {"Set-Cookie": cookie(token)})
+        self.read_body()
+        self.send_json(400, {"error": "Sign in with your name and email."})
 
     def login(self):
         body = self.read_body()
-        person_id = str(body.get("personId") or "")
+        name = clean_name(body.get("name"))
+        username = clean_email(body.get("username"))
         with LOCK:
-            data = load()
-            person = next((entry for entry in (data or {}).get("people", []) if entry["id"] == person_id), None)
+            data = ensure_data()
+            person = next((entry for entry in data["people"] if entry["name"].casefold() == name.casefold()), None)
             if not person:
-                self.send_json(401, {"error": "Choose a name to continue."})
+                self.send_json(401, {"error": "Sign in as Hawwa or Muhammad."})
+                return
+            if not valid_email(username):
+                self.send_json(400, {"error": "Enter your email address."})
+                return
+            if any(entry.get("username") == username and entry["id"] != person["id"] for entry in data["people"]):
+                self.send_json(400, {"error": "That email is already used."})
+                return
+            if not person.get("username"):
+                person["username"] = username
+            elif person["username"] != username:
+                self.send_json(401, {"error": "That username doesn’t match this name."})
                 return
             now = now_ms()
             data["sessions"] = {
@@ -250,7 +321,7 @@ class Handler(BaseHTTPRequestHandler):
     def logout(self):
         token = read_cookie(self.headers.get("Cookie"))
         with LOCK:
-            data = load()
+            data = ensure_data()
             if data and token in data.get("sessions", {}):
                 data["sessions"].pop(token, None)
                 save(data)
