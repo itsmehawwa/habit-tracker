@@ -301,10 +301,10 @@ def main():
         server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     except OSError as error:
         if getattr(error, "errno", None) == 48:
-            print(f"Port {PORT} is already in use. Quit the other Our Habits window, or run PORT=3001 python3 server.py.")
+            print(f"Port {PORT} is already in use. Quit the other Habit Tracker window, or run PORT=3001 python3 server.py.")
             sys.exit(1)
         raise
-    print(f"Our Habits is running.\n  http://localhost:{PORT}")
+    print(f"Habit Tracker is running.\n  http://localhost:{PORT}")
     for address in lan_addresses():
         print(f"  http://{address}:{PORT}")
     print("Keep this window open. Closing it turns the log off.")

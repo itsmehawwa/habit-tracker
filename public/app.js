@@ -38,6 +38,7 @@ async function boot() {
 }
 
 async function api(path, options = {}) {
+  if (location.hostname.endsWith("github.io")) return localApi(path, options);
   const response = await fetch(path, {
     method: options.method || "GET",
     headers: options.body ? { "Content-Type": "application/json" } : undefined,
@@ -48,13 +49,106 @@ async function api(path, options = {}) {
   return data;
 }
 
+function localApi(path, options) {
+  const data = readLocal();
+  const method = options.method || "GET";
+  const body = options.body || {};
+  const me = data.people.find((person) => person.id === localStorage.getItem(ME_KEY));
+
+  if (method === "GET" && path === "/api/me") {
+    if (!me) throw new Error("Sign in to continue.");
+    return stateFor(data, me);
+  }
+  if (method === "GET" && path === "/api/status") {
+    return { needsSetup: data.people.length < 2, people: publicPeople(data) };
+  }
+  if (method === "POST" && path === "/api/setup") {
+    if (data.people.length) throw new Error("This log is already set up.");
+    const names = [cleanName(body.people?.[0]?.name), cleanName(body.people?.[1]?.name)];
+    if (!names[0] || !names[1]) throw new Error("Enter both names.");
+    if (names[0].toLowerCase() === names[1].toLowerCase()) throw new Error("Use two different names.");
+    data.people = names.map((name) => ({ id: newId(), name }));
+    data.checks = {};
+    writeLocal(data);
+    localStorage.setItem(ME_KEY, data.people[0].id);
+    return stateFor(data, data.people[0]);
+  }
+  if (method === "POST" && path === "/api/login") {
+    const person = data.people.find((entry) => entry.id === body.personId);
+    if (!person) throw new Error("Choose a name to continue.");
+    localStorage.setItem(ME_KEY, person.id);
+    return stateFor(data, person);
+  }
+  if (method === "POST" && path === "/api/logout") {
+    localStorage.removeItem(ME_KEY);
+    return { ok: true };
+  }
+  if (method === "PUT" && path === "/api/check") {
+    if (!me) throw new Error("Sign in to continue.");
+    const date = String(body.date || "");
+    const habit = String(body.habit || "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !HABITS.some((item) => item.id === habit) || date > isoFromDate(new Date())) {
+      throw new Error("That day can’t be changed.");
+    }
+    const day = { ...(data.checks[date] || {}) };
+    const mine = { ...(day[me.id] || {}) };
+    if (body.done) mine[habit] = true;
+    else delete mine[habit];
+    if (Object.keys(mine).length) day[me.id] = mine;
+    else delete day[me.id];
+    if (Object.keys(day).length) data.checks[date] = day;
+    else delete data.checks[date];
+    writeLocal(data);
+    return { checks: data.checks };
+  }
+  throw new Error("Not found.");
+}
+
+const LOCAL_KEY = "habit-tracker";
+const ME_KEY = "habit-tracker-me";
+
+function readLocal() {
+  try {
+    const data = JSON.parse(localStorage.getItem(LOCAL_KEY) || "");
+    if (!Array.isArray(data.people) || typeof data.checks !== "object" || !data.checks) throw new Error("bad");
+    return data;
+  } catch {
+    return { people: [], checks: {} };
+  }
+}
+
+function writeLocal(data) {
+  localStorage.setItem(LOCAL_KEY, JSON.stringify({ people: data.people, checks: data.checks }));
+}
+
+function publicPeople(data) {
+  return data.people.map((person) => ({ id: person.id, name: person.name }));
+}
+
+function stateFor(data, person) {
+  return {
+    me: { id: person.id, name: person.name },
+    people: publicPeople(data),
+    checks: data.checks,
+  };
+}
+
+function cleanName(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").slice(0, 24);
+}
+
+function newId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function render() {
   const scroll = window.scrollY;
   if (view === "setup") root.innerHTML = setupHtml();
   else if (view === "login") root.innerHTML = loginHtml();
   else if (view === "app") root.innerHTML = appHtml();
   else if (view === "offline") {
-    root.innerHTML = `<main class="screen"><h1>Our Habits</h1><p class="lede">The log isn’t running on this computer.</p></main>`;
+    root.innerHTML = `<main class="screen"><h1>Habit Tracker</h1><p class="lede">The log isn’t running on this computer.</p></main>`;
   }
   window.scrollTo(0, scroll);
 }
@@ -64,7 +158,7 @@ function setupHtml() {
     <header class="brand">
       <span class="mark" aria-hidden="true"></span>
       <p class="eyebrow">Private</p>
-      <h1>Our Habits</h1>
+      <h1>Habit Tracker</h1>
       <p class="lede">A shared log for the two of you. Fajr on time, morning dua, daily Qur'an, and evening dua.</p>
     </header>
     <section class="card auth">
@@ -86,7 +180,7 @@ function loginHtml() {
     <header class="brand">
       <span class="mark" aria-hidden="true"></span>
       <p class="eyebrow">Private</p>
-      <h1>Our Habits</h1>
+      <h1>Habit Tracker</h1>
       <p class="lede">Who’s logging in today?</p>
     </header>
     <section class="card auth">
@@ -128,7 +222,7 @@ function appHtml() {
     <header class="top">
       <div>
         <p class="eyebrow">${escapeHtml(monthName)}</p>
-        <h1>Our Habits</h1>
+        <h1>Habit Tracker</h1>
       </div>
       <div class="who">
         <strong>${escapeHtml(me.name)}</strong>
