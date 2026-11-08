@@ -9,8 +9,8 @@ const root = document.getElementById("app");
 const now = new Date();
 
 const PEOPLE = [
-  { id: "hawwa", name: "Hawwa" },
-  { id: "muhammad", name: "Muhammad" },
+  { id: "hawwa", name: "Hawwa", username: "" },
+  { id: "muhammad", name: "Muhammad", username: "muhammad.mukthar11@gmail.com" },
 ];
 
 let view = "boot";
@@ -124,7 +124,8 @@ function normalizeLog(data) {
   const people = PEOPLE.map((person, index) => {
     const named = oldPeople.find((entry) => String(entry?.name || "").toLowerCase() === person.name.toLowerCase());
     const source = named || oldPeople[index] || {};
-    return { id: person.id, name: person.name, username: cleanEmail(named?.username || source.username || "") };
+    const stored = named?.username || (!named && source.username) || "";
+    return { id: person.id, name: person.name, username: cleanEmail(person.username || stored) };
   });
   const idMap = {};
   oldPeople.forEach((entry, index) => {

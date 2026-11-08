@@ -19,8 +19,8 @@ DATA_FILE = DATA_DIR / "habits.json"
 PORT = int(os.environ.get("PORT", "3000"))
 HABITS = ("fajr", "morning", "daily-quran", "evening")
 ACCOUNTS = (
-    ("c8b3646c29ef30eb", "Hawwa"),
-    ("b4f806461fc0ecd1", "Muhammad"),
+    ("c8b3646c29ef30eb", "Hawwa", ""),
+    ("b4f806461fc0ecd1", "Muhammad", "muhammad.mukthar11@gmail.com"),
 )
 SESSION_SECONDS = 60 * 60 * 24 * 60
 LOCK = threading.Lock()
@@ -103,9 +103,9 @@ def ensure_data():
     for person in old:
         by_name.setdefault(str(person.get("name") or "").casefold(), person)
     used = set()
-    official = {name.casefold() for _, name in ACCOUNTS}
+    official = {name.casefold() for _, name, _email in ACCOUNTS}
     people = []
-    for fallback_id, name in ACCOUNTS:
+    for fallback_id, name, username in ACCOUNTS:
         existing = by_name.get(name.casefold())
         if existing is None or id(existing) in used:
             existing = next(
@@ -117,14 +117,14 @@ def ensure_data():
                 None,
             )
         if existing is None:
-            people.append({"id": fallback_id, "name": name, "username": ""})
+            people.append({"id": fallback_id, "name": name, "username": clean_email(username)})
             continue
         used.add(id(existing))
         people.append(
             {
                 "id": str(existing.get("id") or fallback_id),
                 "name": name,
-                "username": clean_email(existing.get("username")),
+                "username": clean_email(username or existing.get("username")),
             }
         )
     known = {person["id"] for person in people}
