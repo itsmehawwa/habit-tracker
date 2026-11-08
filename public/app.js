@@ -195,7 +195,6 @@ function loginHtml() {
           <label>Name <input name="name" maxlength="24" autocomplete="name" required /></label>
           <label>Username <input name="username" type="email" maxlength="80" autocomplete="username" inputmode="email" placeholder="Email address" required /></label>
         </div>
-        <p class="hint">Hawwa and Muhammad each sign in with their own email.</p>
         <p class="error" id="form-error"${error ? "" : " hidden"}>${escapeHtml(error)}</p>
         <button class="primary" type="submit">Sign in</button>
       </form>
